@@ -32,19 +32,25 @@ int main(int argc, char *argv[])
     const time_t start = time(NULL);
     time_t last_report = start;
     volatile unsigned long long accumulator = 0;
+    unsigned long long iterations = 0;
 
     while ((unsigned int)(time(NULL) - start) < duration) {
         accumulator = accumulator * 1664525ULL + 1013904223ULL;
+        iterations++;
 
         if (time(NULL) != last_report) {
             last_report = time(NULL);
-            printf("cpu_hog alive elapsed=%ld accumulator=%llu\n",
+            printf("cpu_hog alive elapsed=%ld iterations=%llu accumulator=%llu\n",
                    (long)(last_report - start),
+                   iterations,
                    accumulator);
             fflush(stdout);
         }
     }
 
-    printf("cpu_hog done duration=%u accumulator=%llu\n", duration, accumulator);
+    printf("cpu_hog done duration=%u iterations=%llu accumulator=%llu\n",
+           duration,
+           iterations,
+           accumulator);
     return 0;
 }
