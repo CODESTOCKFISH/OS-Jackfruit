@@ -92,167 +92,53 @@ make clean
 
 ## 3. Demo with Screenshots
 
-The current `screenshots/` folder still contains your earlier placeholder captures. Because this pass focused on fixing the code first, the commands below are the exact sequences to rerun on your Ubuntu VM and capture as the final submission screenshots.
-
 ### Screenshot 1 - Multi-container Supervision
 
-What to show:
+Caption: One supervisor manages two live containers at the same time, and `ps` shows both tracked records together.
 
-- One supervisor process managing at least two live containers at the same time
-- `engine ps` output showing both tracked containers
-
-Commands:
-
-```bash
-cp -a rootfs-base rootfs-alpha
-cp -a rootfs-base rootfs-beta
-cp boilerplate/cpu_hog rootfs-alpha/
-cp boilerplate/io_pulse rootfs-beta/
-
-sudo ./boilerplate/engine start alpha ./rootfs-alpha "/cpu_hog 30" --soft-mib 48 --hard-mib 128 --nice 0
-sudo ./boilerplate/engine start beta ./rootfs-beta "/io_pulse 60 200" --soft-mib 48 --hard-mib 128 --nice 0
-sudo ./boilerplate/engine ps
-```
+![Screenshot 1 - Multi-container supervision](screenshots/screenshot1_multi_container.png)
 
 ### Screenshot 2 - Metadata Tracking
 
-What to show:
+Caption: The `ps` output includes container ID, PID, state, memory limits, nice value, exit status, reason, start time, and log path.
 
-- `engine ps` output with container ID, PID, state, limits, exit status, reason, start time, and log path
-
-Commands:
-
-```bash
-sudo ./boilerplate/engine ps
-```
+![Screenshot 2 - Metadata tracking](screenshots/screenshot2_metadata.png)
 
 ### Screenshot 3 - Bounded-Buffer Logging
 
-What to show:
+Caption: The logging pipeline captures container output into `logs/logger.log`, `engine logs` can replay it, and the thread listing shows the active producer/consumer pipeline.
 
-- Container output retrieved through `engine logs`
-- Persistent `logs/<id>.log` file contents
-- Evidence of the pipeline threads or producer/consumer path
-
-Commands:
-
-```bash
-cp -a rootfs-base rootfs-log
-cp boilerplate/io_pulse rootfs-log/
-
-sudo ./boilerplate/engine start logger ./rootfs-log "/io_pulse 120 200" --soft-mib 48 --hard-mib 128 --nice 0
-ps -T -C engine -o pid,tid,comm,stat,time,args
-sudo ./boilerplate/engine logs logger
-sudo tail -n 20 logs/logger.log
-```
+![Screenshot 3 - Bounded-buffer logging](screenshots/screenshot3_bounded_logging.png)
 
 ### Screenshot 4 - CLI and IPC
 
-What to show:
+Caption: The supervisor remains running while a short-lived CLI client issues commands over the UNIX domain socket control channel.
 
-- The supervisor running in one terminal
-- A client command such as `start`, `ps`, or `stop` in another terminal
-- The supervisor response proving the UNIX domain socket control path is active
-
-Commands:
-
-```bash
-cp -a rootfs-base rootfs-ipc
-cp boilerplate/cpu_hog rootfs-ipc/
-
-sudo ./boilerplate/engine start ipc ./rootfs-ipc "/cpu_hog 60" --soft-mib 48 --hard-mib 128 --nice 0
-sudo ./boilerplate/engine stop ipc
-```
+![Screenshot 4 - CLI and IPC](screenshots/screenshot4_cli_ipc.png)
 
 ### Screenshot 5 - Soft-Limit Warning
 
-What to show:
+Caption: The kernel monitor emits a soft-limit warning in `dmesg`, while supervisor metadata still shows the container as running.
 
-- Kernel log warning for a soft-limit event
-- `engine ps` showing the container still tracked rather than killed
-
-Commands:
-
-```bash
-cp -a rootfs-base rootfs-soft
-cp boilerplate/memory_hog rootfs-soft/
-
-sudo ./boilerplate/engine start softwarn ./rootfs-soft "/memory_hog 8 1000" --soft-mib 24 --hard-mib 256 --nice 0
-sleep 4
-sudo ./boilerplate/engine ps
-sudo dmesg | tail -n 30
-```
+![Screenshot 5 - Soft-limit warning](screenshots/screenshot5_soft_warning.png)
 
 ### Screenshot 6 - Hard-Limit Enforcement
 
-What to show:
+Caption: After crossing the hard limit, the kernel monitor kills the container and the supervisor records the final reason as `hard_limit_killed`.
 
-- Kernel log entry for hard-limit enforcement
-- `engine ps` showing the final reason as `hard_limit_killed`
-
-Commands:
-
-```bash
-cp -a rootfs-base rootfs-hard
-cp boilerplate/memory_hog rootfs-hard/
-
-sudo ./boilerplate/engine start hardkill ./rootfs-hard "/memory_hog 8 500" --soft-mib 24 --hard-mib 40 --nice 0
-sleep 4
-sudo ./boilerplate/engine ps
-sudo dmesg | tail -n 30
-```
+![Screenshot 6 - Hard-limit enforcement](screenshots/screenshot6_hard_enforcement.png)
 
 ### Screenshot 7 - Scheduling Experiment
 
-What to show:
+Caption: Two CPU-bound containers run concurrently with different `nice` values. Since `cpu_hog` is time-based, both runs last about the same wall-clock time, but the higher-priority run completes more loop iterations.
 
-- Two concurrent CPU-bound containers with different `nice` values
-- Their measured completion times
-
-Commands:
-
-```bash
-rm -f hi.out lo.out
-cp -a rootfs-base rootfs-hi
-cp -a rootfs-base rootfs-lo
-cp boilerplate/cpu_hog rootfs-hi/
-cp boilerplate/cpu_hog rootfs-lo/
-
-(
-  start=$(date +%s.%N)
-  sudo ./boilerplate/engine run hi ./rootfs-hi "/cpu_hog 20" --nice 0
-  end=$(date +%s.%N)
-  awk -v s="$start" -v e="$end" 'BEGIN { printf "hi elapsed=%.3f sec\n", e-s }'
-) >hi.out 2>&1 &
-
-(
-  start=$(date +%s.%N)
-  sudo ./boilerplate/engine run lo ./rootfs-lo "/cpu_hog 20" --nice 10
-  end=$(date +%s.%N)
-  awk -v s="$start" -v e="$end" 'BEGIN { printf "lo elapsed=%.3f sec\n", e-s }'
-) >lo.out 2>&1 &
-
-wait
-cat hi.out
-cat lo.out
-```
+![Screenshot 7 - Scheduling experiment](screenshots/screenshot7_scheduling.png)
 
 ### Screenshot 8 - Clean Teardown
 
-What to show:
+Caption: After shutdown, no `engine` processes remain, no defunct processes are left behind, and `/dev/container_monitor` is removed after unloading the module.
 
-- No lingering supervisor or container processes
-- No defunct processes
-- `/dev/container_monitor` removed after module unload
-
-Commands:
-
-```bash
-pgrep -af "/boilerplate/engine" || echo "no engine processes"
-ps -ef | grep "[d]efunct" || echo "no defunct processes"
-sudo rmmod monitor
-test -e /dev/container_monitor && ls /dev/container_monitor || echo "/dev/container_monitor removed"
-```
+![Screenshot 8 - Clean teardown](screenshots/screenshot8_teardown.png)
 
 ## 4. Engineering Analysis
 
@@ -312,20 +198,22 @@ The runtime uses Linux's default scheduler and exposes `nice` values through the
 
 ## 6. Scheduler Experiment Results
 
-Record the final Ubuntu VM measurements from Screenshot 7 here before submission. The runtime is already wired for the experiment above; you only need to replace the sample values with the numbers from your own VM run.
+Record the final Ubuntu VM measurements from Screenshot 7 here before submission. Because `cpu_hog` is a fixed-duration CPU-bound workload, the more useful comparison is loop progress under different `nice` values rather than only wall-clock completion time.
 
 Example format:
 
 | Experiment | Workloads | Configuration | Measurement | Observation |
 | --- | --- | --- | --- | --- |
-| CPU vs CPU | `hi` vs `lo` using `cpu_hog 20` | `nice 0` vs `nice 10` | `hi = <fill> sec`, `lo = <fill> sec` | Lower `nice` should receive a slightly larger CPU share and usually finish earlier |
+| CPU vs CPU | `hi` vs `lo` using `cpu_hog 20` | `nice 0` vs `nice 19` | `hi = <fill> sec, <fill> iterations`; `lo = <fill> sec, <fill> iterations` | The higher-priority run should make more forward progress in the same fixed-duration window |
 
 Raw output block to replace with your actual run:
 
 ```text
 Container 'hi' finished: exited
 hi elapsed=<fill> sec
+cpu_hog done duration=20 iterations=<fill> accumulator=<fill>
 
 Container 'lo' finished: exited
 lo elapsed=<fill> sec
+cpu_hog done duration=20 iterations=<fill> accumulator=<fill>
 ```
