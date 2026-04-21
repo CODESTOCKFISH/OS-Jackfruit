@@ -9,15 +9,15 @@
 
 ### Environment
 
-- The project guide targets Ubuntu 22.04 or 24.04 in a VM.
-- The provided screenshots were captured on Ubuntu 24.
-- Building the kernel module and running container commands requires `sudo`.
+- Ubuntu 22.04 or 24.04 VM
+- Secure Boot disabled for kernel module loading
+- Root privileges required for module load, namespace setup, `chroot()`, and `/proc` mounting
 
 ### Install Dependencies
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential linux-headers-$(uname -r)
+sudo apt install -y build-essential linux-headers-$(uname -r) wget
 ```
 
 ### Build and Preflight
@@ -49,17 +49,12 @@ cd ..
 mkdir -p rootfs-base
 wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
 tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
-```
-
-If workload binaries should be available inside a container, copy them into the rootfs before launch:
-
-```bash
 cp boilerplate/cpu_hog rootfs-base/
 cp boilerplate/io_pulse rootfs-base/
 cp boilerplate/memory_hog rootfs-base/
 ```
 
-Create writable per-container copies as needed:
+Create one writable copy per container before each run:
 
 ```bash
 cp -a rootfs-base rootfs-alpha
@@ -74,230 +69,263 @@ ls -l /dev/container_monitor
 sudo ./boilerplate/engine supervisor ./rootfs-base
 ```
 
-### CLI Commands Used in the Demo Walkthrough
-
-With the supervisor running in another terminal:
+### CLI Contract Implemented
 
 ```bash
-sudo ./boilerplate/engine start alpha ./rootfs-alpha /bin/sh --soft-mib 48 --hard-mib 80
-cp -a rootfs-base rootfs-test
-sudo ./boilerplate/engine run test ./rootfs-test "/bin/echo hello"
+sudo ./boilerplate/engine start <id> <container-rootfs> "<command>" [--soft-mib N] [--hard-mib N] [--nice N]
+sudo ./boilerplate/engine run   <id> <container-rootfs> "<command>" [--soft-mib N] [--hard-mib N] [--nice N]
 sudo ./boilerplate/engine ps
-sudo ./boilerplate/engine logs alpha
-sudo ./boilerplate/engine logs test
-sudo ./boilerplate/engine stop alpha
-```
-
-Standalone workload binaries:
-
-```bash
-cd boilerplate
-./memory_hog
-./cpu_hog
-./io_pulse
-```
-
-### Exact Command Sequence Reflected in the Screenshots
-
-Screenshot 1:
-
-```bash
-cd ~/OS-Jackfruit
-ls
-```
-
-Screenshot 2:
-
-```bash
-cd boilerplate
-```
-
-Screenshot 3:
-
-```bash
-make ci
-```
-
-Screenshot 4:
-
-```bash
-./engine
-```
-
-Screenshot 5:
-
-```bash
-./memory_hog
-```
-
-Screenshot 6:
-
-```bash
-./cpu_hog
-```
-
-Screenshot 7:
-
-```bash
-./io_pulse
-```
-
-Screenshot 8:
-
-```bash
-cd ..
-sudo ./boilerplate/engine run test ./rootfs-base "/bin/echo hello"
-```
-
-Screenshot 9:
-
-```bash
-sudo ./boilerplate/engine ps
-```
-
-Screenshot 10:
-
-```bash
-sudo ./boilerplate/engine logs test
+sudo ./boilerplate/engine logs <id>
+sudo ./boilerplate/engine stop <id>
 ```
 
 ### Cleanup
 
+Stop the supervisor with `Ctrl+C`, then clean up:
+
 ```bash
+pgrep -af "/boilerplate/engine" || echo "no engine processes"
+ps -ef | grep "[d]efunct" || echo "no defunct processes"
 sudo rmmod monitor
 make clean
 ```
 
 ## 3. Demo with Screenshots
 
-### Screenshot 1 - Repository Layout
+The current `screenshots/` folder still contains your earlier placeholder captures. Because this pass focused on fixing the code first, the commands below are the exact sequences to rerun on your Ubuntu VM and capture as the final submission screenshots.
 
-Caption: The repository root contains the boilerplate sources, project guide, README, and screenshots folder used for the submission walkthrough.
+### Screenshot 1 - Multi-container Supervision
 
-![Screenshot 1: Repository layout](screenshots/1_ls.png)
+What to show:
 
-### Screenshot 2 - Entering the Boilerplate Directory
+- One supervisor process managing at least two live containers at the same time
+- `engine ps` output showing both tracked containers
 
-Caption: The terminal moves into `boilerplate/`, which contains the runtime, monitor, workloads, and build logic.
+Commands:
 
-![Screenshot 2: Boilerplate directory](screenshots/2_cd.png)
+```bash
+cp -a rootfs-base rootfs-alpha
+cp -a rootfs-base rootfs-beta
+cp boilerplate/cpu_hog rootfs-alpha/
+cp boilerplate/io_pulse rootfs-beta/
 
-### Screenshot 3 - CI-Safe Build
+sudo ./boilerplate/engine start alpha ./rootfs-alpha "/cpu_hog 30" --soft-mib 48 --hard-mib 128 --nice 0
+sudo ./boilerplate/engine start beta ./rootfs-beta "/io_pulse 60 200" --soft-mib 48 --hard-mib 128 --nice 0
+sudo ./boilerplate/engine ps
+```
 
-Caption: `make ci` completes without rebuilding work unnecessarily, confirming that the CI-safe user-space build path is available.
+### Screenshot 2 - Metadata Tracking
 
-![Screenshot 3: CI-safe build](screenshots/3_make.png)
+What to show:
 
-### Screenshot 4 - Engine CLI Contract
+- `engine ps` output with container ID, PID, state, limits, exit status, reason, start time, and log path
 
-Caption: Running `./engine` without arguments prints the supported command interface for `supervisor`, `start`, `run`, `ps`, `logs`, and `stop`.
+Commands:
 
-![Screenshot 4: Engine usage output](screenshots/4_engine.png)
+```bash
+sudo ./boilerplate/engine ps
+```
 
-### Screenshot 5 - Memory Workload
+### Screenshot 3 - Bounded-Buffer Logging
 
-Caption: `memory_hog` increases memory usage in 8 MiB chunks, which is the behavior intended for memory-monitor experiments.
+What to show:
 
-![Screenshot 5: memory_hog output](screenshots/5_memory.png)
+- Container output retrieved through `engine logs`
+- Persistent `logs/<id>.log` file contents
+- Evidence of the pipeline threads or producer/consumer path
 
-### Screenshot 6 - CPU Workload
+Commands:
 
-Caption: `cpu_hog` runs for a fixed duration and continuously reports progress, making it suitable for CPU scheduling experiments.
+```bash
+cp -a rootfs-base rootfs-log
+cp boilerplate/io_pulse rootfs-log/
 
-![Screenshot 6: cpu_hog output](screenshots/6_cpu.png)
+sudo ./boilerplate/engine start logger ./rootfs-log "/io_pulse 120 200" --soft-mib 48 --hard-mib 128 --nice 0
+ps -T -C engine -o pid,tid,comm,stat,time,args
+sudo ./boilerplate/engine logs logger
+sudo tail -n 20 logs/logger.log
+```
 
-### Screenshot 7 - I/O Workload
+### Screenshot 4 - CLI and IPC
 
-Caption: `io_pulse` emits periodic write events, providing an I/O-oriented workload distinct from the CPU-bound case.
+What to show:
 
-![Screenshot 7: io_pulse output](screenshots/7_io.png)
+- The supervisor running in one terminal
+- A client command such as `start`, `ps`, or `stop` in another terminal
+- The supervisor response proving the UNIX domain socket control path is active
 
-### Screenshot 8 - Foreground Container Run Walkthrough
+Commands:
 
-Caption: This screenshot captures an early `engine run` walkthrough from the Ubuntu session; the final codebase now implements supervisor-backed `run` over the UNIX socket control path.
+```bash
+cp -a rootfs-base rootfs-ipc
+cp boilerplate/cpu_hog rootfs-ipc/
 
-![Screenshot 8: engine run output](screenshots/8_run.png)
+sudo ./boilerplate/engine start ipc ./rootfs-ipc "/cpu_hog 60" --soft-mib 48 --hard-mib 128 --nice 0
+sudo ./boilerplate/engine stop ipc
+```
 
-### Screenshot 9 - Process Listing Walkthrough
+### Screenshot 5 - Soft-Limit Warning
 
-Caption: This screenshot captures an early `engine ps` walkthrough from the same session; the current implementation now returns live supervisor metadata for tracked containers.
+What to show:
 
-![Screenshot 9: engine ps output](screenshots/9_ps.png)
+- Kernel log warning for a soft-limit event
+- `engine ps` showing the container still tracked rather than killed
 
-### Screenshot 10 - Log Inspection Walkthrough
+Commands:
 
-Caption: This screenshot captures the `engine logs` CLI walkthrough from the same session; the current implementation now serves log output through the supervisor control plane.
+```bash
+cp -a rootfs-base rootfs-soft
+cp boilerplate/memory_hog rootfs-soft/
 
-![Screenshot 10: engine logs output](screenshots/10_logs.png)
+sudo ./boilerplate/engine start softwarn ./rootfs-soft "/memory_hog 8 1000" --soft-mib 24 --hard-mib 256 --nice 0
+sleep 4
+sudo ./boilerplate/engine ps
+sudo dmesg | tail -n 30
+```
+
+### Screenshot 6 - Hard-Limit Enforcement
+
+What to show:
+
+- Kernel log entry for hard-limit enforcement
+- `engine ps` showing the final reason as `hard_limit_killed`
+
+Commands:
+
+```bash
+cp -a rootfs-base rootfs-hard
+cp boilerplate/memory_hog rootfs-hard/
+
+sudo ./boilerplate/engine start hardkill ./rootfs-hard "/memory_hog 8 500" --soft-mib 24 --hard-mib 40 --nice 0
+sleep 4
+sudo ./boilerplate/engine ps
+sudo dmesg | tail -n 30
+```
+
+### Screenshot 7 - Scheduling Experiment
+
+What to show:
+
+- Two concurrent CPU-bound containers with different `nice` values
+- Their measured completion times
+
+Commands:
+
+```bash
+rm -f hi.out lo.out
+cp -a rootfs-base rootfs-hi
+cp -a rootfs-base rootfs-lo
+cp boilerplate/cpu_hog rootfs-hi/
+cp boilerplate/cpu_hog rootfs-lo/
+
+(
+  start=$(date +%s.%N)
+  sudo ./boilerplate/engine run hi ./rootfs-hi "/cpu_hog 20" --nice 0
+  end=$(date +%s.%N)
+  awk -v s="$start" -v e="$end" 'BEGIN { printf "hi elapsed=%.3f sec\n", e-s }'
+) >hi.out 2>&1 &
+
+(
+  start=$(date +%s.%N)
+  sudo ./boilerplate/engine run lo ./rootfs-lo "/cpu_hog 20" --nice 10
+  end=$(date +%s.%N)
+  awk -v s="$start" -v e="$end" 'BEGIN { printf "lo elapsed=%.3f sec\n", e-s }'
+) >lo.out 2>&1 &
+
+wait
+cat hi.out
+cat lo.out
+```
+
+### Screenshot 8 - Clean Teardown
+
+What to show:
+
+- No lingering supervisor or container processes
+- No defunct processes
+- `/dev/container_monitor` removed after module unload
+
+Commands:
+
+```bash
+pgrep -af "/boilerplate/engine" || echo "no engine processes"
+ps -ef | grep "[d]efunct" || echo "no defunct processes"
+sudo rmmod monitor
+test -e /dev/container_monitor && ls /dev/container_monitor || echo "/dev/container_monitor removed"
+```
 
 ## 4. Engineering Analysis
 
 ### Isolation Mechanisms
 
-The runtime is designed around namespace-based isolation. PID namespaces give a container its own process tree view, UTS namespaces isolate hostname state, and mount namespaces isolate the mount table so `/proc` can be mounted inside the container without affecting the host. Filesystem isolation is achieved with a container-specific rootfs and `chroot()`. Even with that isolation, all containers still share the same host kernel, scheduler, and physical memory system, which is why containers are lighter than virtual machines and why kernel-enforced policies still matter.
+Each container is created with `clone()` using `CLONE_NEWPID`, `CLONE_NEWUTS`, and `CLONE_NEWNS`, so the child gets an isolated PID namespace, hostname namespace, and mount table. The child marks the mount tree private, enters its assigned filesystem with `chroot()`, changes to `/`, and mounts a fresh `/proc`. That isolates process visibility and the filesystem view, while the host kernel, scheduler, and physical memory remain shared.
 
 ### Supervisor and Process Lifecycle
 
-A long-running supervisor is useful because container lifecycle state spans multiple user requests. The supervisor can own metadata, reap child processes on `SIGCHLD`, preserve final exit reasons, and coordinate cleanup. Short-lived CLI clients are good for usability, but they cannot safely maintain global runtime state by themselves. That is why the architecture separates the daemon role from the command role.
+The long-running supervisor owns the global container table, logging pipeline, signal handling, and cleanup. Short-lived CLI clients connect over a UNIX domain socket, send one request, receive one response, and exit. `SIGCHLD` handling plus `waitpid(..., WNOHANG)` allows the supervisor to reap child processes promptly and preserve final metadata such as exit code, signal, and stop reason.
 
 ### IPC, Threads, and Synchronization
 
-The project uses two IPC directions. The intended control plane is a UNIX domain socket between CLI clients and the supervisor. The logging path uses file-descriptor-based communication from container `stdout` and `stderr` into the supervisor, where producer and consumer threads coordinate through a bounded buffer. Shared metadata needs a separate lock from the log queue because container state updates and log handling are logically independent concurrency domains. Without synchronization, the design would be vulnerable to torn metadata updates, queue corruption, missed wakeups, and dropped log data.
+The control path uses a UNIX domain socket between CLI clients and the supervisor. The logging path uses pipes from each container's `stdout` and `stderr` into the supervisor. Producer threads read pipe data and push it into a bounded circular buffer. A logger thread pops entries and writes them into per-container log files. The bounded buffer uses one mutex and two condition variables so producers block when the queue is full, consumers block when it is empty, and shutdown can wake both sides cleanly. Container metadata uses a separate mutex to avoid races between CLI commands, child reaping, and stop escalation.
+
+In kernel space, the monitored-process list uses a mutex because both the `ioctl` path and the delayed-work monitor path run in sleepable context. That lets the monitor safely call RSS helpers and free list nodes without doing sleepable work in timer interrupt context.
 
 ### Memory Management and Enforcement
 
-The kernel monitor tracks RSS because RSS reflects the resident physical memory currently used by a process. It does not equal total virtual address space and it does not capture every kernel-side memory cost, but it is a practical signal for per-process enforcement. Soft and hard limits intentionally represent different policies: a soft limit is a warning threshold, while a hard limit is an enforcement threshold. Kernel-space enforcement is important because the kernel has the authority and visibility needed to inspect process memory reliably and terminate offending tasks even if user space is delayed.
+The kernel module tracks RSS because RSS reflects the amount of physical memory currently resident for a process. It does not equal total virtual address space, and it does not capture every kernel-side memory overhead, but it is a useful enforcement metric. A soft limit is a warning threshold and is reported only once. A hard limit is an enforcement threshold and results in `SIGKILL`. Kernel-space enforcement is important because the kernel has direct authority over process accounting and signal delivery.
 
 ### Scheduling Behavior
 
-The workload programs are designed to expose scheduling differences. `cpu_hog` is CPU-bound, so it competes directly for processor time. `io_pulse` yields naturally between write events, making it a better fit for responsiveness-oriented observations. In a fuller experiment, different `nice` values would change each CPU-bound task's relative scheduling weight. Even the standalone workload outputs in the screenshots illustrate why different workload shapes matter: one saturates the CPU, one stresses memory growth, and one performs periodic I/O.
+The runtime uses Linux's default scheduler and exposes `nice` values through the CLI so experiments can vary scheduling weight without changing the kernel scheduler itself. CPU-bound workloads compete directly for processor time, while I/O-bound workloads naturally sleep between operations. Running them concurrently shows how Linux balances fairness, responsiveness, and throughput.
 
 ## 5. Design Decisions and Tradeoffs
 
 ### Namespace Isolation
 
-- Design choice: use PID, UTS, and mount namespaces with `chroot()`.
-- Tradeoff: `chroot()` is simpler than `pivot_root()`, but it is a weaker filesystem boundary.
-- Justification: it keeps the implementation manageable while still demonstrating the required OS isolation mechanisms.
+- Design choice: PID, UTS, and mount namespaces with `chroot()`
+- Tradeoff: `chroot()` is simpler than `pivot_root()`, but it is a weaker filesystem jail
+- Justification: it satisfies the assignment scope with lower implementation complexity
 
 ### Supervisor Architecture
 
-- Design choice: separate the long-running supervisor from short-lived CLI clients.
-- Tradeoff: this introduces IPC and synchronized metadata management.
-- Justification: it is the cleanest way to support multi-container state, child reaping, and reusable commands.
+- Design choice: one long-lived supervisor plus short-lived CLI clients
+- Tradeoff: this requires an explicit control-plane IPC design
+- Justification: it centralizes metadata, reaping, logging, and cleanup
 
 ### IPC and Logging
 
-- Design choice: use one IPC path for control and a separate path for logging.
-- Tradeoff: a two-channel design is more complex than direct terminal output.
-- Justification: it matches the assignment requirements and makes producer-consumer coordination explicit.
+- Design choice: UNIX domain socket for commands and pipe-based logging into a bounded buffer
+- Tradeoff: the design is more complex than direct writes because it needs queue synchronization and thread management
+- Justification: it clearly demonstrates two IPC mechanisms and a producer-consumer logging pipeline
 
 ### Kernel Monitor
 
-- Design choice: use a character device and `ioctl` registration for monitored PIDs.
-- Tradeoff: the user-kernel contract must be designed and maintained carefully.
-- Justification: it creates a narrow, explicit boundary between supervisor policy decisions and kernel enforcement.
+- Design choice: character device plus `ioctl` registration with periodic delayed-work RSS checks
+- Tradeoff: sampling is simpler than event-driven accounting but not instantaneous
+- Justification: it keeps the kernel-user contract small while still supporting soft warnings and hard kills
 
-### Workload Design
+### Scheduling Experiment
 
-- Design choice: include dedicated memory, CPU, and I/O workloads.
-- Tradeoff: synthetic workloads are simpler than real applications, but they capture only a narrow slice of behavior.
-- Justification: they are reproducible and make resource-specific effects easier to observe during testing.
+- Design choice: reusable workload binaries with `nice` as the scheduling control
+- Tradeoff: `nice` adjusts scheduler weight but does not expose every scheduling knob
+- Justification: it is easy to reproduce and directly tied to Linux scheduling policy
 
 ## 6. Scheduler Experiment Results
 
-The reference repository includes a stronger scheduling section than this screenshot set supports. Your available screenshots show standalone workload behavior rather than a side-by-side `nice` comparison, so this section records only the evidence actually present in the repo.
+Record the final Ubuntu VM measurements from Screenshot 7 here before submission. The runtime is already wired for the experiment above; you only need to replace the sample values with the numbers from your own VM run.
 
-| Workload | Evidence from Screenshot | Observation |
-| --- | --- | --- |
-| `memory_hog` | Allocations increase from `8MB` up to `152MB` before interruption | The program is suitable for soft-limit and hard-limit memory experiments |
-| `cpu_hog` | Progress messages report elapsed time from `1` to `10` seconds | The program is suitable for CPU-share or priority experiments |
-| `io_pulse` | Iterative writes progress from `1` to `20` | The program is suitable for responsiveness or I/O-oriented comparisons |
+Example format:
 
-What is still missing for a full scheduler-results section:
+| Experiment | Workloads | Configuration | Measurement | Observation |
+| --- | --- | --- | --- | --- |
+| CPU vs CPU | `hi` vs `lo` using `cpu_hog 20` | `nice 0` vs `nice 10` | `hi = <fill> sec`, `lo = <fill> sec` | Lower `nice` should receive a slightly larger CPU share and usually finish earlier |
 
-- two concurrent workload runs
-- at least two scheduling configurations such as different `nice` values
-- measured elapsed times or throughput comparisons
+Raw output block to replace with your actual run:
 
-Once you capture those runs, this section can be upgraded into the same style as the reference repo with a comparison table and raw timing outputs.
+```text
+Container 'hi' finished: exited
+hi elapsed=<fill> sec
+
+Container 'lo' finished: exited
+lo elapsed=<fill> sec
+```

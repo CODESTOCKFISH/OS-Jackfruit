@@ -11,6 +11,7 @@ boilerplate/io_pulse
 *.o
 *.mod
 *.mod.c
+*.d
 Module.symvers
 modules.order
 *.cmd
@@ -32,3 +33,7 @@ logs/
 *.swp
 *~
 .vscode/
+
+# Local experiment output captures
+hi*.out
+lo*.out

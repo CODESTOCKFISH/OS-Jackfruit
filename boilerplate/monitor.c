@@ -13,9 +13,9 @@
 #include <linux/pid.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
-#include <linux/timer.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
+#include <linux/workqueue.h>
 
 #include "monitor_ioctl.h"
 
@@ -24,30 +24,21 @@
 
 struct monitored_entry {
     pid_t pid;
-    char container_id[MONITOR_NAME_LEN];
     unsigned long soft_limit_bytes;
     unsigned long hard_limit_bytes;
-    bool soft_limit_reported;
+    char container_id[MONITOR_NAME_LEN];
+    bool soft_limit_emitted;
     struct list_head list;
 };
-
 
 static LIST_HEAD(monitored_list);
 static DEFINE_MUTEX(monitored_lock);
 
-
-/* --- Provided: internal device / timer state --- */
-static struct timer_list monitor_timer;
+static struct delayed_work monitor_work;
 static dev_t dev_num;
 static struct cdev c_dev;
 static struct class *cl;
 
-/* ---------------------------------------------------------------
- * Provided: RSS Helper
- *
- * Returns the Resident Set Size in bytes for the given PID,
- * or -1 if the task no longer exists.
- * --------------------------------------------------------------- */
 static long get_rss_bytes(pid_t pid)
 {
     struct task_struct *task;
@@ -73,11 +64,6 @@ static long get_rss_bytes(pid_t pid)
     return rss_pages * PAGE_SIZE;
 }
 
-/* ---------------------------------------------------------------
- * Provided: soft-limit helper
- *
- * Log a warning when a process exceeds the soft limit.
- * --------------------------------------------------------------- */
 static void log_soft_limit_event(const char *container_id,
                                  pid_t pid,
                                  unsigned long limit_bytes,
@@ -88,11 +74,6 @@ static void log_soft_limit_event(const char *container_id,
            container_id, pid, rss_bytes, limit_bytes);
 }
 
-/* ---------------------------------------------------------------
- * Provided: hard-limit helper
- *
- * Kill a process when it exceeds the hard limit.
- * --------------------------------------------------------------- */
 static void kill_process(const char *container_id,
                          pid_t pid,
                          unsigned long limit_bytes,
@@ -111,12 +92,11 @@ static void kill_process(const char *container_id,
            container_id, pid, rss_bytes, limit_bytes);
 }
 
-/* ---------------------------------------------------------------
- * Timer Callback - fires every CHECK_INTERVAL_SEC seconds.
- * --------------------------------------------------------------- */
-static void timer_callback(struct timer_list *t)
+static void monitor_workfn(struct work_struct *work)
 {
     struct monitored_entry *entry, *tmp;
+
+    (void)work;
 
     mutex_lock(&monitored_lock);
     list_for_each_entry_safe(entry, tmp, &monitored_list, list) {
@@ -128,15 +108,15 @@ static void timer_callback(struct timer_list *t)
             continue;
         }
 
-        if (!entry->soft_limit_reported && rss_bytes > (long)entry->soft_limit_bytes) {
+        if (!entry->soft_limit_emitted && rss_bytes > entry->soft_limit_bytes) {
+            entry->soft_limit_emitted = true;
             log_soft_limit_event(entry->container_id,
                                  entry->pid,
                                  entry->soft_limit_bytes,
                                  rss_bytes);
-            entry->soft_limit_reported = true;
         }
 
-        if (rss_bytes > (long)entry->hard_limit_bytes) {
+        if (rss_bytes > entry->hard_limit_bytes) {
             kill_process(entry->container_id,
                          entry->pid,
                          entry->hard_limit_bytes,
@@ -147,16 +127,9 @@ static void timer_callback(struct timer_list *t)
     }
     mutex_unlock(&monitored_lock);
 
-    mod_timer(&monitor_timer, jiffies + CHECK_INTERVAL_SEC * HZ);
+    schedule_delayed_work(&monitor_work, CHECK_INTERVAL_SEC * HZ);
 }
 
-/* ---------------------------------------------------------------
- * IOCTL Handler
- *
- * Supported operations:
- *   - register a PID with soft + hard limits
- *   - unregister a PID when the runtime no longer needs tracking
- * --------------------------------------------------------------- */
 static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
     struct monitor_request req;
@@ -171,12 +144,9 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
     if (cmd == MONITOR_REGISTER) {
         struct monitored_entry *entry;
+        struct monitored_entry *iter;
 
-        printk(KERN_INFO
-               "[container_monitor] Registering container=%s pid=%d soft=%lu hard=%lu\n",
-               req.container_id, req.pid, req.soft_limit_bytes, req.hard_limit_bytes);
-
-        if (req.pid <= 0 || req.soft_limit_bytes == 0 || req.hard_limit_bytes == 0 ||
+        if (req.pid <= 0 || req.hard_limit_bytes == 0 ||
             req.soft_limit_bytes > req.hard_limit_bytes)
             return -EINVAL;
 
@@ -188,10 +158,23 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         entry->soft_limit_bytes = req.soft_limit_bytes;
         entry->hard_limit_bytes = req.hard_limit_bytes;
         strscpy(entry->container_id, req.container_id, sizeof(entry->container_id));
+        entry->soft_limit_emitted = false;
 
         mutex_lock(&monitored_lock);
+        list_for_each_entry(iter, &monitored_list, list) {
+            if (iter->pid == entry->pid ||
+                strncmp(iter->container_id, entry->container_id, sizeof(iter->container_id)) == 0) {
+                mutex_unlock(&monitored_lock);
+                kfree(entry);
+                return -EEXIST;
+            }
+        }
         list_add_tail(&entry->list, &monitored_list);
         mutex_unlock(&monitored_lock);
+
+        printk(KERN_INFO
+               "[container_monitor] Registering container=%s pid=%d soft=%lu hard=%lu\n",
+               req.container_id, req.pid, req.soft_limit_bytes, req.hard_limit_bytes);
         return 0;
     }
 
@@ -200,11 +183,12 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
            req.container_id, req.pid);
 
     {
-        struct monitored_entry *entry, *tmp;
+        struct monitored_entry *entry;
+        struct monitored_entry *tmp;
 
         mutex_lock(&monitored_lock);
         list_for_each_entry_safe(entry, tmp, &monitored_list, list) {
-            if ((req.pid > 0 && entry->pid == req.pid) ||
+            if (entry->pid == req.pid ||
                 strncmp(entry->container_id, req.container_id, sizeof(entry->container_id)) == 0) {
                 list_del(&entry->list);
                 kfree(entry);
@@ -218,13 +202,11 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
     return -ENOENT;
 }
 
-/* --- Provided: file operations --- */
 static struct file_operations fops = {
     .owner = THIS_MODULE,
     .unlocked_ioctl = monitor_ioctl,
 };
 
-/* --- Provided: Module Init --- */
 static int __init monitor_init(void)
 {
     if (alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME) < 0)
@@ -254,19 +236,18 @@ static int __init monitor_init(void)
         return -1;
     }
 
-    timer_setup(&monitor_timer, timer_callback, 0);
-    mod_timer(&monitor_timer, jiffies + CHECK_INTERVAL_SEC * HZ);
+    INIT_DELAYED_WORK(&monitor_work, monitor_workfn);
+    schedule_delayed_work(&monitor_work, CHECK_INTERVAL_SEC * HZ);
 
     printk(KERN_INFO "[container_monitor] Module loaded. Device: /dev/%s\n", DEVICE_NAME);
     return 0;
 }
 
-/* --- Provided: Module Exit --- */
 static void __exit monitor_exit(void)
 {
     struct monitored_entry *entry, *tmp;
 
-    timer_shutdown_sync(&monitor_timer);
+    cancel_delayed_work_sync(&monitor_work);
 
     mutex_lock(&monitored_lock);
     list_for_each_entry_safe(entry, tmp, &monitored_list, list) {
