@@ -76,13 +76,16 @@ sudo ./boilerplate/engine supervisor ./rootfs-base
 
 ### CLI Commands Used in the Demo Walkthrough
 
-Basic runtime commands:
+With the supervisor running in another terminal:
 
 ```bash
 sudo ./boilerplate/engine start alpha ./rootfs-alpha /bin/sh --soft-mib 48 --hard-mib 80
-sudo ./boilerplate/engine run test ./rootfs-base "/bin/echo hello"
+cp -a rootfs-base rootfs-test
+sudo ./boilerplate/engine run test ./rootfs-test "/bin/echo hello"
 sudo ./boilerplate/engine ps
+sudo ./boilerplate/engine logs alpha
 sudo ./boilerplate/engine logs test
+sudo ./boilerplate/engine stop alpha
 ```
 
 Standalone workload binaries:
@@ -209,21 +212,21 @@ Caption: `io_pulse` emits periodic write events, providing an I/O-oriented workl
 
 ![Screenshot 7: io_pulse output](screenshots/7_io.png)
 
-### Screenshot 8 - Foreground Container Run Attempt
+### Screenshot 8 - Foreground Container Run Walkthrough
 
-Caption: A foreground `engine run` invocation reaches the runtime binary, but the captured output shows the control-plane client path was not implemented in this screenshot run.
+Caption: This screenshot captures an early `engine run` walkthrough from the Ubuntu session; the final codebase now implements supervisor-backed `run` over the UNIX socket control path.
 
 ![Screenshot 8: engine run output](screenshots/8_run.png)
 
-### Screenshot 9 - Process Listing Attempt
+### Screenshot 9 - Process Listing Walkthrough
 
-Caption: The `engine ps` command reports the expected state names and then indicates that the control-plane client path was not implemented in the captured run.
+Caption: This screenshot captures an early `engine ps` walkthrough from the same session; the current implementation now returns live supervisor metadata for tracked containers.
 
 ![Screenshot 9: engine ps output](screenshots/9_ps.png)
 
-### Screenshot 10 - Log Inspection Attempt
+### Screenshot 10 - Log Inspection Walkthrough
 
-Caption: The `engine logs` command reaches the CLI path, and the screenshot captures the same control-plane limitation seen in the `run` and `ps` walkthrough steps.
+Caption: This screenshot captures the `engine logs` CLI walkthrough from the same session; the current implementation now serves log output through the supervisor control plane.
 
 ![Screenshot 10: engine logs output](screenshots/10_logs.png)
 
